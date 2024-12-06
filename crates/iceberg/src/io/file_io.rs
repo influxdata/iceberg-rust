@@ -198,7 +198,7 @@ impl FileRead for opendal::Reader {
 }
 
 /// Input file is used for reading from files.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InputFile {
     op: Operator,
     // Absolution path of file.
@@ -280,7 +280,7 @@ impl FileWrite for opendal::Writer {
 }
 
 /// Output file is used for writing to files..
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OutputFile {
     op: Operator,
     // Absolution path of file.
