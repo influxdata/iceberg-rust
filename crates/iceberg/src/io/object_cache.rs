@@ -253,36 +253,40 @@ mod tests {
             let current_snapshot = self.table.metadata().current_snapshot().unwrap();
             let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
             let current_partition_spec = self.table.metadata().default_partition_spec();
+            let manifest_file_output = self.next_manifest_file();
 
             // Write data files
             let data_file_manifest = ManifestWriter::new(
-                self.next_manifest_file(),
+                manifest_file_output.location().to_string(),
                 current_snapshot.snapshot_id(),
                 vec![],
             )
-            .write(Manifest::new(
-                ManifestMetadata::builder()
-                    .schema((*current_schema).clone())
-                    .content(ManifestContentType::Data)
-                    .format_version(FormatVersion::V2)
-                    .partition_spec((**current_partition_spec).clone())
-                    .schema_id(current_schema.schema_id())
-                    .build(),
-                vec![ManifestEntry::builder()
-                    .status(ManifestStatus::Added)
-                    .data_file(
-                        DataFileBuilder::default()
-                            .content(DataContentType::Data)
-                            .file_path(format!("{}/1.parquet", &self.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(100))]))
-                            .build()
-                            .unwrap(),
-                    )
-                    .build()],
-            ))
+            .write(
+                manifest_file_output,
+                Manifest::new(
+                    ManifestMetadata::builder()
+                        .schema((*current_schema).clone())
+                        .content(ManifestContentType::Data)
+                        .format_version(FormatVersion::V2)
+                        .partition_spec((**current_partition_spec).clone())
+                        .schema_id(current_schema.schema_id())
+                        .build(),
+                    vec![ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/1.parquet", &self.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build()],
+                ),
+            )
             .await
             .unwrap();
 
