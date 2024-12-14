@@ -122,18 +122,22 @@ impl ManifestListWriter {
     pub fn v2(
         output_file: OutputFile,
         snapshot_id: i64,
-        parent_snapshot_id: i64,
+        parent_snapshot_id: Option<i64>,
         sequence_number: i64,
     ) -> Self {
-        let metadata = HashMap::from_iter([
+        let mut metadata = HashMap::from_iter([
             ("snapshot-id".to_string(), snapshot_id.to_string()),
-            (
-                "parent-snapshot-id".to_string(),
-                parent_snapshot_id.to_string(),
-            ),
             ("sequence-number".to_string(), sequence_number.to_string()),
             ("format-version".to_string(), "2".to_string()),
         ]);
+
+        if let Some(parent_snapshot_id) = parent_snapshot_id {
+            metadata.insert(
+                "parent-snapshot-id".to_string(),
+                parent_snapshot_id.to_string(),
+            );
+        }
+
         Self::new(
             FormatVersion::V2,
             output_file,
