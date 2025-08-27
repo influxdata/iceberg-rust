@@ -24,10 +24,11 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestEntry, ManifestFile,
-    ManifestListWriter, ManifestWriterBuilder, Operation, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
-    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT, Snapshot, SnapshotReference, SnapshotRetention,
-    SnapshotSummaryCollector, Struct, StructType, Summary, update_snapshot_summaries,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestWriterBuilder, Operation,
+    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
+    Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType,
+    Summary, update_snapshot_summaries,
 };
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
@@ -66,6 +67,7 @@ pub(crate) struct SnapshotProduceAction<'a> {
     commit_uuid: Uuid,
     snapshot_properties: HashMap<String, String>,
     pub added_data_files: Vec<DataFile>,
+    pub added_delete_files: Vec<DataFile>,
     // A counter used to generate unique manifest file names.
     // It starts from 0 and increments for each new manifest file.
     // Note: This counter is limited to the range of (0..u64::MAX).
@@ -86,6 +88,7 @@ impl<'a> SnapshotProduceAction<'a> {
             commit_uuid,
             snapshot_properties,
             added_data_files: vec![],
+            added_delete_files: vec![],
             manifest_counter: (0..),
             key_metadata,
         })
@@ -126,15 +129,17 @@ impl<'a> SnapshotProduceAction<'a> {
     pub fn add_data_files(
         &mut self,
         data_files: impl IntoIterator<Item = DataFile>,
+        deleted_data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
-        let data_files: Vec<DataFile> = data_files.into_iter().collect();
-        for data_file in &data_files {
+        for data_file in data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Only data content type is allowed for fast append",
                 ));
             }
+            self.added_data_files.push(data_file.clone());
+
             // Check if the data file partition spec id matches the table default partition spec id.
             if self.tx.current_table.metadata().default_partition_spec_id()
                 != data_file.partition_spec_id
@@ -149,7 +154,24 @@ impl<'a> SnapshotProduceAction<'a> {
                 self.tx.current_table.metadata().default_partition_type(),
             )?;
         }
-        self.added_data_files.extend(data_files);
+
+        for data_file in deleted_data_files {
+            self.added_delete_files.push(data_file.clone());
+
+            // Check if the data file partition spec id matches the table default partition spec id.
+            if self.tx.current_table.metadata().default_partition_spec_id()
+                != data_file.partition_spec_id
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Data file partition spec id does not match table default partition spec id",
+                ));
+            }
+            Self::validate_partition_value(
+                data_file.partition(),
+                self.tx.current_table.metadata().default_partition_type(),
+            )?;
+        }
         Ok(self)
     }
 
@@ -170,8 +192,7 @@ impl<'a> SnapshotProduceAction<'a> {
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        let added_data_files = std::mem::take(&mut self.added_data_files);
-        if added_data_files.is_empty() {
+        if self.added_data_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files found when write a manifest file",
@@ -180,7 +201,7 @@ impl<'a> SnapshotProduceAction<'a> {
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.tx.current_table.metadata().format_version();
-        let manifest_entries = added_data_files.into_iter().map(|data_file| {
+        let manifest_entries = self.added_data_files.clone().into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);
@@ -211,6 +232,7 @@ impl<'a> SnapshotProduceAction<'a> {
                 builder.build_v2_data()
             }
         };
+
         for entry in manifest_entries {
             writer.add_entry(entry)?;
         }
@@ -222,14 +244,21 @@ impl<'a> SnapshotProduceAction<'a> {
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
     ) -> Result<Vec<ManifestFile>> {
-        let added_manifest = self.write_added_manifest().await?;
-        let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
-        // # TODO
-        // Support process delete entries.
+        let mut existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
 
-        let mut manifest_files = vec![added_manifest];
-        manifest_files.extend(existing_manifests);
-        let manifest_files = manifest_process.process_manifests(manifest_files);
+        if !self.added_data_files.is_empty() {
+            let added_data_files = std::mem::take(&mut self.added_data_files);
+            let added_manifest = self.write_added_manifest(added_data_files).await?;
+            existing_manifests.push(added_manifest);
+        }
+
+        if !self.added_delete_files.is_empty() {
+            let added_delete_files = std::mem::take(&mut self.added_delete_files);
+            let added_manifest = self.write_added_manifest(added_delete_files).await?;
+            existing_manifests.push(added_manifest);
+        }
+
+        let manifest_files = manifest_process.process_manifests(existing_manifests);
         Ok(manifest_files)
     }
 

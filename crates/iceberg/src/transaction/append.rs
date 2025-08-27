@@ -67,8 +67,10 @@ impl<'a> FastAppendAction<'a> {
     pub fn add_data_files(
         &mut self,
         data_files: impl IntoIterator<Item = DataFile>,
+        deleted_data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
-        self.snapshot_produce_action.add_data_files(data_files)?;
+        self.snapshot_produce_action
+            .add_data_files(data_files, deleted_data_files)?;
         Ok(self)
     }
 
@@ -103,13 +105,20 @@ impl<'a> FastAppendAction<'a> {
         )
         .await?;
 
-        self.add_data_files(data_files)?;
+        self.add_data_files(data_files, Vec::new())?;
 
         self.apply().await
     }
 
     /// Finished building the action and apply it to the transaction.
     pub async fn apply(self) -> Result<Transaction<'a>> {
+        if self.snapshot_produce_action.added_data_files.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "cannot apply no data files to transaction",
+            ));
+        }
+
         // Checks duplicate files
         if self.check_duplicate {
             let new_files: HashSet<&str> = self
@@ -224,7 +233,7 @@ mod tests {
         let table = make_v2_minimal_table();
         let tx = Transaction::new(&table);
         let mut action = tx.fast_append(None, vec![]).unwrap();
-        action.add_data_files(vec![]).unwrap();
+        action.add_data_files(vec![], vec![]).unwrap();
         assert!(action.apply().await.is_err());
     }
 
@@ -245,8 +254,14 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::string("test"))]))
             .build()
             .unwrap();
-        assert!(action.add_data_files(vec![data_file.clone()]).is_err());
+        assert!(
+            action
+                .add_data_files(vec![data_file.clone(),], vec![])
+                .is_err()
+        );
 
+        let tx = Transaction::new(&table);
+        let mut action = tx.fast_append(None, vec![]).unwrap();
         let data_file = DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path("test/3.parquet".to_string())
@@ -257,7 +272,9 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap();
-        action.add_data_files(vec![data_file.clone()]).unwrap();
+        action
+            .add_data_files(vec![data_file.clone()], vec![])
+            .unwrap();
         let tx = action.apply().await.unwrap();
 
         // check updates and requirements

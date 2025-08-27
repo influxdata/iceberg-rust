@@ -122,7 +122,7 @@ async fn test_append_partition_data_file() {
     let tx = Transaction::new(&table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     append_action
-        .add_data_files(data_file_valid.clone())
+        .add_data_files(data_file_valid.clone(), vec![])
         .unwrap();
     let tx = append_action.apply().await.unwrap();
     let table = tx.commit(&rest_catalog).await.unwrap();
@@ -182,7 +182,7 @@ async fn test_schema_incompatible_partition_type(
     let tx = Transaction::new(&table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     if append_action
-        .add_data_files(data_file_invalid.clone())
+        .add_data_files(data_file_invalid.clone(), vec![])
         .is_ok()
     {
         panic!("diverging partition info should have returned error");
@@ -222,7 +222,7 @@ async fn test_schema_incompatible_partition_fields(
     let tx = Transaction::new(&table);
     let mut append_action = tx.fast_append(None, vec![]).unwrap();
     if append_action
-        .add_data_files(data_file_invalid.clone())
+        .add_data_files(data_file_invalid.clone(), vec![])
         .is_ok()
     {
         panic!("passing different number of partition fields should have returned error");
