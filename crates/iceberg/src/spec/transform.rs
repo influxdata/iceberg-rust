@@ -144,6 +144,12 @@ impl Transform {
                 match self {
                     Self::Identity => datum.to_string(),
                     Self::Void => "null".to_string(),
+                    // TODO: does this appear anywhere?
+                    //
+                    // It looks like this is used for metrics/statistics, but we hit the todo
+                    // panic otherwise without filling something here.
+                    Self::Day | Self::Month | Self::Year | Self::Hour => datum.to_string(),
+                    Self::Bucket(_) => datum.to_string(),
                     _ => {
                         todo!()
                     }
