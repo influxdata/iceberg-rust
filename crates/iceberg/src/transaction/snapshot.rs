@@ -24,11 +24,10 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::io::OutputFile;
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
-    ManifestFile, ManifestListWriter, ManifestWriterBuilder, Operation,
-    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT,
-    Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct, StructType,
-    Summary, update_snapshot_summaries,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestEntry, ManifestFile,
+    ManifestListWriter, ManifestWriterBuilder, Operation, PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT,
+    PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT_DEFAULT, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, update_snapshot_summaries,
 };
 use crate::transaction::Transaction;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
@@ -247,17 +246,30 @@ impl<'a> SnapshotProduceAction<'a> {
         let mut existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
 
         if !self.added_data_files.is_empty() {
-            let added_data_files = std::mem::take(&mut self.added_data_files);
-            let added_manifest = self.write_added_manifest(added_data_files).await?;
+            let added_manifest = self.write_added_manifest().await?;
             existing_manifests.push(added_manifest);
         }
 
         if !self.added_delete_files.is_empty() {
-            let added_delete_files = std::mem::take(&mut self.added_delete_files);
-            let added_manifest = self.write_added_manifest(added_delete_files).await?;
-            existing_manifests.push(added_manifest);
+            for manifest in existing_manifests.clone() {
+                let manifest_entry = manifest
+                    .load_manifest(self.tx.current_table.file_io())
+                    .await?;
+                for entry in manifest_entry.entries() {
+                    // HACK: this will be quite slow.
+                    let idx = if let Some(idx) = self
+                        .added_delete_files
+                        .iter()
+                        .position(|d| d.file_path == entry.data_file.file_path)
+                    {
+                        idx
+                    } else {
+                        continue;
+                    };
+                    existing_manifests.swap_remove(idx);
+                }
+            }
         }
-
         let manifest_files = manifest_process.process_manifests(existing_manifests);
         Ok(manifest_files)
     }
