@@ -130,14 +130,14 @@ impl<'a> SnapshotProduceAction<'a> {
         data_files: impl IntoIterator<Item = DataFile>,
         deleted_data_files: impl IntoIterator<Item = DataFile>,
     ) -> Result<&mut Self> {
-        for data_file in data_files {
+        let data_files: Vec<DataFile> = data_files.into_iter().collect();
+        for data_file in &data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     "Only data content type is allowed for fast append",
                 ));
             }
-            self.added_data_files.push(data_file.clone());
 
             // Check if the data file partition spec id matches the table default partition spec id.
             if self.tx.current_table.metadata().default_partition_spec_id()
@@ -154,9 +154,8 @@ impl<'a> SnapshotProduceAction<'a> {
             )?;
         }
 
-        for data_file in deleted_data_files {
-            self.added_delete_files.push(data_file.clone());
-
+        let deleted_data_files: Vec<DataFile> = deleted_data_files.into_iter().collect();
+        for data_file in &deleted_data_files {
             // Check if the data file partition spec id matches the table default partition spec id.
             if self.tx.current_table.metadata().default_partition_spec_id()
                 != data_file.partition_spec_id
@@ -171,6 +170,8 @@ impl<'a> SnapshotProduceAction<'a> {
                 self.tx.current_table.metadata().default_partition_type(),
             )?;
         }
+        self.added_data_files.extend(data_files);
+        self.added_delete_files.extend(deleted_data_files);
         Ok(self)
     }
 
@@ -191,7 +192,8 @@ impl<'a> SnapshotProduceAction<'a> {
 
     // Write manifest file for added data files and return the ManifestFile for ManifestList.
     async fn write_added_manifest(&mut self) -> Result<ManifestFile> {
-        if self.added_data_files.is_empty() {
+        let added_data_files = std::mem::take(&mut self.added_data_files);
+        if added_data_files.is_empty() {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "No added data files found when write a manifest file",
@@ -200,7 +202,7 @@ impl<'a> SnapshotProduceAction<'a> {
 
         let snapshot_id = self.snapshot_id;
         let format_version = self.tx.current_table.metadata().format_version();
-        let manifest_entries = self.added_data_files.clone().into_iter().map(|data_file| {
+        let manifest_entries = added_data_files.into_iter().map(|data_file| {
             let builder = ManifestEntry::builder()
                 .status(crate::spec::ManifestStatus::Added)
                 .data_file(data_file);

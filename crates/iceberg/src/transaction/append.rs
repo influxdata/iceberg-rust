@@ -256,7 +256,7 @@ mod tests {
             .unwrap();
         assert!(
             action
-                .add_data_files(vec![data_file.clone(),], vec![])
+                .add_data_files(vec![data_file.clone()], vec![])
                 .is_err()
         );
 
