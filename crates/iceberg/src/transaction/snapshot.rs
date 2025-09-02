@@ -251,22 +251,22 @@ impl<'a> SnapshotProduceAction<'a> {
         }
 
         if !self.added_delete_files.is_empty() {
+            let deleted_file_paths_to_idx: HashMap<&str, usize> = HashMap::from_iter(
+                self.added_delete_files
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, d)| (d.file_path(), idx)),
+            );
             for manifest in existing_manifests.clone() {
                 let manifest_entry = manifest
                     .load_manifest(self.tx.current_table.file_io())
                     .await?;
                 for entry in manifest_entry.entries() {
-                    // HACK: this will be quite slow.
-                    let idx = if let Some(idx) = self
-                        .added_delete_files
-                        .iter()
-                        .position(|d| d.file_path == entry.data_file.file_path)
-                    {
-                        idx
-                    } else {
-                        continue;
-                    };
-                    existing_manifests.swap_remove(idx);
+                    if let Some(idx) = deleted_file_paths_to_idx.get(entry.data_file.file_path()) {
+                        // Do not include the data (parquet) file in the existing manifest list
+                        // if it has been known to be removed.
+                        existing_manifests.swap_remove(*idx);
+                    }
                 }
             }
         }
