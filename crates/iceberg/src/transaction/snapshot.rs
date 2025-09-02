@@ -274,7 +274,8 @@ impl<'a> SnapshotProduceAction<'a> {
                     .any(|entry| deleted_file_paths.contains(entry.file_path()));
 
                 if has_deleted_entries {
-                    // Need to rewrite this manifest without the deleted entries
+                    // When there are deleted files, we should write the new manifests
+                    // of this snapshot without including those entries.
                     let mut writer = {
                         let builder = ManifestWriterBuilder::new(
                             self.new_manifest_output()?,
