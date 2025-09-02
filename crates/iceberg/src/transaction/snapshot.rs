@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::RangeFrom;
 
@@ -253,24 +253,68 @@ impl<'a> SnapshotProduceAction<'a> {
         }
 
         if !self.added_delete_files.is_empty() {
-            let deleted_file_paths_to_idx: HashMap<&str, usize> = HashMap::from_iter(
-                self.added_delete_files
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, d)| (d.file_path(), idx)),
-            );
-            for manifest in existing_manifests.clone() {
-                let manifest_entry = manifest
+            let deleted_file_paths: HashSet<String> = self
+                .added_delete_files
+                .iter()
+                .map(|df| df.file_path.clone())
+                .collect();
+
+            // Filter existing manifests to remove entries for deleted files
+            let mut filtered_manifests = Vec::new();
+
+            for manifest in existing_manifests {
+                let manifest_entries = manifest
                     .load_manifest(self.tx.current_table.file_io())
                     .await?;
-                for entry in manifest_entry.entries() {
-                    if let Some(idx) = deleted_file_paths_to_idx.get(entry.data_file.file_path()) {
-                        // Do not include the data (parquet) file in the existing manifest list
-                        // if it has been known to be removed.
-                        existing_manifests.swap_remove(*idx);
+
+                // Check if any entries in this manifest are for deleted files
+                let has_deleted_entries = manifest_entries
+                    .entries()
+                    .iter()
+                    .any(|entry| deleted_file_paths.contains(entry.file_path()));
+
+                if has_deleted_entries {
+                    // Need to rewrite this manifest without the deleted entries
+                    let mut writer = {
+                        let builder = ManifestWriterBuilder::new(
+                            self.new_manifest_output()?,
+                            Some(self.snapshot_id),
+                            self.key_metadata.clone(),
+                            self.tx.current_table.metadata().current_schema().clone(),
+                            self.tx
+                                .current_table
+                                .metadata()
+                                .default_partition_spec()
+                                .as_ref()
+                                .clone(),
+                        );
+                        if self.tx.current_table.metadata().format_version() == FormatVersion::V1 {
+                            builder.build_v1()
+                        } else {
+                            builder.build_v2_data()
+                        }
+                    };
+
+                    for entry in manifest_entries.entries() {
+                        // Skip the deleted entry so it does not show up in
+                        // the latest snapshot that is generated.
+                        if deleted_file_paths.contains(entry.file_path()) {
+                            continue;
+                        }
+                        writer.add_entry(entry.as_ref().clone())?;
                     }
+
+                    let new_manifest = writer.write_manifest_file().await?;
+                    filtered_manifests.push(new_manifest);
+                } else {
+                    // No deleted entries in this manifest, keep it as-is
+                    filtered_manifests.push(manifest);
                 }
             }
+
+            // Replace the existing manifests with our modified list
+            // which omits the known deleted data (parquet) files.
+            existing_manifests = filtered_manifests;
         }
         let manifest_files = manifest_process.process_manifests(existing_manifests);
         Ok(manifest_files)
